@@ -40,6 +40,7 @@
 #include "AP_InertialSensor_NONE.h"
 #include "AP_InertialSensor_SCHA63T.h"
 #include "AP_InertialSensor_ASM330.h"
+#include "AP_InertialSensor_CustomSerialIMU.h"
 #include <AP_Scheduler/AP_Scheduler.h>
 
 /* Define INS_TIMING_DEBUG to track down scheduling issues with the main loop.
@@ -1206,6 +1207,16 @@ AP_InertialSensor::detect_backends(void)
     const int8_t serial_port = AP::externalAHRS().get_port(AP_ExternalAHRS::AvailableSensor::IMU);
     if (serial_port >= 0) {
         ADD_BACKEND(NEW_NOTHROW AP_InertialSensor_ExternalAHRS(*this, serial_port));
+    }
+#endif
+
+#if AP_INERTIALSENSOR_CUSTOM_SERIAL_IMU_ENABLED
+    // Custom Serial IMU on AHRS-configured serial port
+    {
+        auto *backend = AP_InertialSensor_CustomSerialIMU::probe(*this);
+        if (backend != nullptr) {
+            ADD_BACKEND(backend);
+        }
     }
 #endif
 
