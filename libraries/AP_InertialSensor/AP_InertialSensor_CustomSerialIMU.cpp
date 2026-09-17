@@ -22,6 +22,7 @@
 #include "AP_InertialSensor_CustomSerialIMU.h"
 #include <AP_HAL/AP_HAL.h>
 #include <AP_SerialManager/AP_SerialManager.h>
+#include <GCS_MAVLink/GCS.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -261,7 +262,7 @@ AP_InertialSensor_Backend *AP_InertialSensor_CustomSerialIMU::probe(AP_InertialS
     AP_HAL::UARTDriver *uart = SM.find_serial(
         AP_SerialManager::SerialProtocol_AHRS, 1);
     if (uart == nullptr) {
-        hal.console->printf("CustomSerialIMU: no SERIALx_PROTOCOL=36 (SerialProtocol_AHRS) configured, probe skipped\n");
+        GCS_SEND_TEXT(MAV_SEVERITY_INFO, "CustomSerialIMU: no SERIALx_PROTOCOL=36 (SerialProtocol_AHRS) configured, probe skipped");
         return nullptr;
     }
 
@@ -313,8 +314,7 @@ AP_InertialSensor_Backend *AP_InertialSensor_CustomSerialIMU::probe(AP_InertialS
     }
 
     uart->discard_input();
-    hal.console->printf("CustomSerialIMU: only %u/3 valid frames in 3s on AHRS UART (check RS-422 wiring/baud/power)\n",
-                        (unsigned)valid_frames);
+    GCS_SEND_TEXT(MAV_SEVERITY_INFO, "CustomSerialIMU: only %u/3 valid frames in 3s on AHRS UART (check RS-422 wiring/baud/power)", (unsigned)valid_frames);
     return nullptr;
 }
 
