@@ -320,7 +320,7 @@ AP_InertialSensor_Backend *AP_InertialSensor_CustomSerialIMU::probe(AP_InertialS
     uint8_t rxbuf[FRAME_SIZE];
     uint16_t rxbuf_pos = 0;
     uint8_t valid_frames = 0;
-    uint32_t deadline = AP_HAL::millis() + 3000;
+    uint32_t deadline = AP_HAL::millis() + 60000;
 
     while (AP_HAL::millis() < deadline) {
         int16_t n = uart->available();
@@ -364,7 +364,7 @@ AP_InertialSensor_Backend *AP_InertialSensor_CustomSerialIMU::probe(AP_InertialS
     uart->discard_input();
     {
         char m[128];
-        snprintf(m, sizeof(m), "CustomSerialIMU: only %u/3 valid frames in 3s on AHRS UART (check RS-422 wiring/baud/power)", (unsigned)valid_frames);
+        snprintf(m, sizeof(m), "CustomSerialIMU: only %u/3 valid frames in 60s on AHRS UART (check RS-422 wiring/baud/power)", (unsigned)valid_frames);
         hal.console->printf("%s\n", m);
         strncpy(_probe_failure_msg, m, sizeof(_probe_failure_msg) - 1);
         _probe_failure_msg[sizeof(_probe_failure_msg) - 1] = 0;
