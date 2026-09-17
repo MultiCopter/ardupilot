@@ -1210,15 +1210,6 @@ AP_InertialSensor::detect_backends(void)
     }
 #endif
 
-#if AP_INERTIALSENSOR_CUSTOM_SERIAL_IMU_ENABLED
-    // Custom Serial IMU on AHRS-configured serial port
-    {
-        auto *backend = AP_InertialSensor_CustomSerialIMU::probe(*this);
-        if (backend != nullptr) {
-            ADD_BACKEND(backend);
-        }
-    }
-#endif
 
 #if AP_SIM_INS_ENABLED
     for (uint8_t i=0; i<AP::sitl()->imu_count; i++) {
@@ -1230,6 +1221,18 @@ AP_InertialSensor::detect_backends(void)
 #if defined(HAL_INS_PROBE_LIST)
     // IMUs defined by IMU lines in hwdef.dat
     HAL_INS_PROBE_LIST;
+
+#if AP_INERTIALSENSOR_CUSTOM_SERIAL_IMU_ENABLED
+    // Custom Serial IMU: register as the LAST IMU instance (IMU3 on CUAVv5,
+    // which has 3 on-board SPI IMUs) so it never displaces the built-in IMUs
+    // regardless of probe order. Requires INS_AUX_INSTANCES>=1 (INS_MAX_INSTANCES>=4).
+    {
+        auto *backend = AP_InertialSensor_CustomSerialIMU::probe(*this);
+        if (backend != nullptr) {
+            ADD_BACKEND_INSTANCE(backend, INS_MAX_INSTANCES-1);
+        }
+    }
+#endif
 #if defined(HAL_SITL_INVENSENSEV3)
     ADD_BACKEND(AP_InertialSensor_Invensensev3::probe(*this, hal.i2c_mgr->get_device(1, 1), ROTATION_NONE));
 #endif
