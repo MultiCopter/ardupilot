@@ -1915,6 +1915,21 @@ void AP_InertialSensor::update(void)
     // wait_for_sample(), and a wait is implied
     wait_for_sample();
 
+#if AP_INERTIALSENSOR_CUSTOM_SERIAL_IMU_ENABLED
+    {
+        // Re-broadcast probe() failure text at 1Hz for up to 60s so the
+        // GCS sees it even if it connects after boot (the original
+        // GCS_SEND_TEXT from probe() is often discarded).
+        const uint32_t now_ms = AP_HAL::millis();
+        if (AP_InertialSensor_CustomSerialIMU::tick_probe_failure_broadcast(now_ms)) {
+            const char *m = AP_InertialSensor_CustomSerialIMU::get_pending_probe_failure();
+            if (m != nullptr) {
+                GCS_SEND_TEXT(MAV_SEVERITY_INFO, "%s", m);
+            }
+        }
+    }
+#endif
+
         for (uint8_t i=0; i<INS_MAX_INSTANCES; i++) {
             // mark sensors unhealthy and let update() in each backend
             // mark them healthy via _publish_gyro() and

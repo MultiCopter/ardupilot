@@ -32,6 +32,16 @@ public:
     /* probe function - returns nullptr if sensor not detected */
     static AP_InertialSensor_Backend *probe(AP_InertialSensor &imu);
 
+    /* probe-failure broadcast state.
+       When probe() fails, the failure text is stashed here so that
+       AP_InertialSensor::update() can re-emit it via GCS_SEND_TEXT
+       at 1Hz for up to 60s. The boot-time STATUSTEXT from probe()
+       is often discarded because the GCS hasn't connected yet.
+    */
+    static const char *get_pending_probe_failure();
+    static bool tick_probe_failure_broadcast(uint32_t now_ms);
+    static void clear_pending_probe_failure();
+
     /* sensor frontend interface */
     bool update() override;
     void start() override;
@@ -64,6 +74,12 @@ private:
         Vector3f accel;
         float temp;
     } accum;
+
+    /* pending probe-failure message for GCS_SEND_TEXT re-broadcast */
+    static char _probe_failure_msg[128];
+    static uint32_t _probe_failure_last_send_ms;
+    static uint8_t _probe_failure_send_count;
+    static bool _probe_failure_pending;
 
     /* CRC16 (Modbus RTU polynomial 0x8005) */
     uint16_t crc16_modbus(const uint8_t *data, uint16_t len);

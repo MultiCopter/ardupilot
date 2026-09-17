@@ -28,6 +28,47 @@
 
 extern const AP_HAL::HAL& hal;
 
+// =====================================================================
+// Static probe-failure broadcast state
+// When probe() fails, the failure text is stashed here so that
+// AP_InertialSensor::update() can re-emit it via GCS_SEND_TEXT at 1Hz
+// for up to 60s. The boot-time STATUSTEXT from probe() is often
+// discarded because the GCS hasn't connected yet.
+// =====================================================================
+char AP_InertialSensor_CustomSerialIMU::_probe_failure_msg[128] = {0};
+uint32_t AP_InertialSensor_CustomSerialIMU::_probe_failure_last_send_ms = 0;
+uint8_t AP_InertialSensor_CustomSerialIMU::_probe_failure_send_count = 0;
+bool AP_InertialSensor_CustomSerialIMU::_probe_failure_pending = false;
+
+const char *AP_InertialSensor_CustomSerialIMU::get_pending_probe_failure()
+{
+    return _probe_failure_pending ? _probe_failure_msg : nullptr;
+}
+
+bool AP_InertialSensor_CustomSerialIMU::tick_probe_failure_broadcast(uint32_t now_ms)
+{
+    if (!_probe_failure_pending) {
+        return false;
+    }
+    if (_probe_failure_send_count >= 60) {  // stop after 60 ticks (~60s)
+        return false;
+    }
+    if (now_ms - _probe_failure_last_send_ms < 1000) {
+        return false;
+    }
+    _probe_failure_last_send_ms = now_ms;
+    _probe_failure_send_count++;
+    return true;
+}
+
+void AP_InertialSensor_CustomSerialIMU::clear_pending_probe_failure()
+{
+    _probe_failure_pending = false;
+    _probe_failure_msg[0] = 0;
+    _probe_failure_send_count = 0;
+    _probe_failure_last_send_ms = 0;
+}
+
 /*
   CRC16 - Modbus RTU polynomial 0xA001 (reflected 0x8005)
 */
@@ -262,8 +303,14 @@ AP_InertialSensor_Backend *AP_InertialSensor_CustomSerialIMU::probe(AP_InertialS
     AP_HAL::UARTDriver *uart = SM.find_serial(
         AP_SerialManager::SerialProtocol_AHRS, 1);
     if (uart == nullptr) {
-        hal.console->printf("CustomSerialIMU: no SERIALx_PROTOCOL=36 (SerialProtocol_AHRS) configured, probe skipped\n");
-        GCS_SEND_TEXT(MAV_SEVERITY_INFO, "CustomSerialIMU: no SERIALx_PROTOCOL=36 (SerialProtocol_AHRS) configured, probe skipped");
+        const char *m = "CustomSerialIMU: no SERIALx_PROTOCOL=36 (SerialProtocol_AHRS) configured, probe skipped";
+        hal.console->printf("%s\n", m);
+        strncpy(_probe_failure_msg, m, sizeof(_probe_failure_msg) - 1);
+        _probe_failure_msg[sizeof(_probe_failure_msg) - 1] = 0;
+        _probe_failure_pending = true;
+        _probe_failure_send_count = 0;
+        _probe_failure_last_send_ms = 0;
+        GCS_SEND_TEXT(MAV_SEVERITY_INFO, "%s", m);
         return nullptr;
     }
 
@@ -315,8 +362,17 @@ AP_InertialSensor_Backend *AP_InertialSensor_CustomSerialIMU::probe(AP_InertialS
     }
 
     uart->discard_input();
-    hal.console->printf("CustomSerialIMU: only %u/3 valid frames in 3s on AHRS UART (check RS-422 wiring/baud/power)\n", (unsigned)valid_frames);
-    GCS_SEND_TEXT(MAV_SEVERITY_INFO, "CustomSerialIMU: only %u/3 valid frames in 3s on AHRS UART (check RS-422 wiring/baud/power)", (unsigned)valid_frames);
+    {
+        char m[128];
+        snprintf(m, sizeof(m), "CustomSerialIMU: only %u/3 valid frames in 3s on AHRS UART (check RS-422 wiring/baud/power)", (unsigned)valid_frames);
+        hal.console->printf("%s\n", m);
+        strncpy(_probe_failure_msg, m, sizeof(_probe_failure_msg) - 1);
+        _probe_failure_msg[sizeof(_probe_failure_msg) - 1] = 0;
+        _probe_failure_pending = true;
+        _probe_failure_send_count = 0;
+        _probe_failure_last_send_ms = 0;
+        GCS_SEND_TEXT(MAV_SEVERITY_INFO, "%s", m);
+    }
     return nullptr;
 }
 
