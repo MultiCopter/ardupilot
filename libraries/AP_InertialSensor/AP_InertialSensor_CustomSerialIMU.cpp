@@ -150,8 +150,10 @@ bool AP_InertialSensor_CustomSerialIMU::parse_frame(const uint8_t *frame)
     // unlike ICM20689/ICM20602/BMI055 which output raw counts that need
     // scale-factor multiply + bias subtraction. So: no scale, no bias here.
     // Only convert gyro deg/s -> rad/s (EKF/AHRS expect rad/s and m/s^2).
-    accum.gyro  = Vector3f(gx, gy, gz) * DEG_TO_RAD;
-    accum.accel = Vector3f(ax, ay, az);
+    // IMU->body axis remap: IMU X=body-Z, IMU Y=body Y, IMU Z=body-X
+    accum.gyro  = Vector3f(-gz, gy, -gx) * DEG_TO_RAD;
+    // same IMU->body axis remap applied to accel
+    accum.accel = Vector3f(-az, ay, -ax);
     accum.temp  = temp_raw * TEMP_SCALE;
     accum.last_update_us = AP_HAL::micros64();
 
