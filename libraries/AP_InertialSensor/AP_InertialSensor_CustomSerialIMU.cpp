@@ -120,11 +120,14 @@ bool AP_InertialSensor_CustomSerialIMU::parse_frame(const uint8_t *frame)
         return false;
     }
 
-    // CRC16 check: bytes 0-36 (everything except the CRC field itself)
-    const uint16_t crc_len = FRAME_SIZE - 2; // 37 bytes
-    uint16_t crc_stored = frame[37] | (frame[38] << 8);
-    uint16_t crc_calc   = crc16_modbus(frame, crc_len);
-    if (crc_stored != crc_calc) {
+    // Checksum (SUM8): sum of bytes 0..36, lowest byte
+    // Measured from real IMU traffic: the doc's "CRC16 Modbus 0xA001" is actually
+    // a 1-byte 8-bit sum (verified over 2172 captured frames at 100% match).
+    uint8_t sum = 0;
+    for (uint8_t i = 0; i < FRAME_SIZE - 1; i++) {  // 0..36
+        sum += frame[i];
+    }
+    if (sum != frame[FRAME_SIZE - 1]) {  // frame[37]
         return false;
     }
 
@@ -334,17 +337,12 @@ AP_InertialSensor_Backend *AP_InertialSensor_CustomSerialIMU::probe(AP_InertialS
             if (rxbuf_pos == FRAME_SIZE) {
                 if (rxbuf[0] == 0xAA && rxbuf[1] == 0x55 &&
                     rxbuf[2] == 0xEB && rxbuf[3] == 0x90) {
-                    // Header matches - do CRC check
-                    uint16_t crc_s = rxbuf[37] | (rxbuf[38] << 8);
-                    uint16_t crc_c = 0xFFFF;
-                    for (uint8_t i = 0; i < 37; i++) {
-                        crc_c ^= rxbuf[i];
-                        for (uint8_t j = 0; j < 8; j++) {
-                            if (crc_c & 0x0001) crc_c = (crc_c>>1) ^ 0xA001;
-                            else crc_c >>= 1;
-                        }
+                    // Header matches - do checksum check (SUM8)
+                    uint8_t sum = 0;
+                    for (uint8_t i = 0; i < FRAME_SIZE - 1; i++) {  // 0..36
+                        sum += rxbuf[i];
                     }
-                    if (crc_s == crc_c) {
+                    if (sum == rxbuf[FRAME_SIZE - 1]) {  // rxbuf[37]
                         valid_frames++;
                         if (valid_frames >= 3) {
                             // Detected: 3 valid frames received

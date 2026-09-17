@@ -50,7 +50,7 @@ public:
     bool get_output_banner(char *banner, uint8_t banner_len) override;
 
 private:
-    static constexpr uint8_t FRAME_SIZE   = 39;
+    static constexpr uint8_t FRAME_SIZE   = 38;  // measured: 4 hdr + 4 cnt + 24 data + 2 temp + 3 reserved + 1 bytesum(SUM8)
     static constexpr uint16_t FRAME_HEADER = 0x55AA;  // bytes 0-1
     static constexpr uint16_t FRAME_HEADER2 = 0x90EB; // bytes 2-3 (little-endian)
 
