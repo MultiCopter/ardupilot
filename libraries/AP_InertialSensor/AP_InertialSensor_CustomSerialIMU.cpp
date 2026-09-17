@@ -301,7 +301,7 @@ AP_InertialSensor_Backend *AP_InertialSensor_CustomSerialIMU::probe(AP_InertialS
     // Try SERIALx with SerialProtocol_AHRS (protocol 36)
     // find_serial returns the first matching port
     AP_HAL::UARTDriver *uart = SM.find_serial(
-        AP_SerialManager::SerialProtocol_AHRS, 1);
+        AP_SerialManager::SerialProtocol_AHRS, 0);
     if (uart == nullptr) {
         const char *m = "CustomSerialIMU: no SERIALx_PROTOCOL=36 (SerialProtocol_AHRS) configured, probe skipped";
         hal.console->printf("%s\n", m);
@@ -349,9 +349,9 @@ AP_InertialSensor_Backend *AP_InertialSensor_CustomSerialIMU::probe(AP_InertialS
                         if (valid_frames >= 3) {
                             // Detected: 3 valid frames received
                             uart->discard_input();
-                            // Use port ID 0 as a sentinel; the actual UART
-                            // pointer is captured from find_serial above
-                            return NEW_NOTHROW AP_InertialSensor_CustomSerialIMU(imu, 0);
+                            // Capture the actual SERIAL port index so bus_id / HW ID is correct
+                            const int8_t port_idx = SM.find_portnum(AP_SerialManager::SerialProtocol_AHRS, 0);
+                            return NEW_NOTHROW AP_InertialSensor_CustomSerialIMU(imu, port_idx);
                         }
                     }
                 }
@@ -393,9 +393,9 @@ AP_InertialSensor_CustomSerialIMU::AP_InertialSensor_CustomSerialIMU(
     accum.temp = 25.0f;   // default 25℃
     accum.last_update_us = 0;
 
-    // Retrieve the UART from SerialManager
+    // Retrieve the UART from SerialManager (first AHRS-configured port)
     AP_SerialManager &SM = AP::serialmanager();
-    uart = SM.find_serial(AP_SerialManager::SerialProtocol_AHRS, 1);
+    uart = SM.find_serial(AP_SerialManager::SerialProtocol_AHRS, 0);
 }
 
 /*
