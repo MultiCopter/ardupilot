@@ -2,7 +2,7 @@
   Custom Serial IMU backend for AP_InertialSensor
 
   Protocol: RS-422, 921600 bps, 8N1, 1000 Hz output
-  Frame: 39 bytes
+  Frame: 38 bytes
     [0]     0xAA           header byte 0
     [1]     0x55           header byte 1
     [2]     0xEB           header byte 2
@@ -16,7 +16,8 @@
     [28-31] float LE       Az  (m/s²)
     [32-33] int16 LE       Temp (℃ × 100)
     [34-36] --            reserved (00H)
-    [37-38] uint16 LE     CRC16 (bytes 0-36, Modbus/RTU polynomial 0xA001)
+    [37]    uint8          SUM8 = (sum of bytes 0..36) & 0xFF
+                          NOTE: doc says "CRC16 0xA001" but IMU emits a 1-byte 8-bit sum
 */
 
 #include "AP_InertialSensor_CustomSerialIMU.h"
@@ -108,7 +109,7 @@ static inline int16_t read_int16_le(const uint8_t *p)
 }
 
 /*
-  Parse one complete 39-byte frame.
+  Parse one complete 38-byte frame.
   Frame is little-endian (LSB first).
   Returns true if frame is valid and data is extracted into accum.
 */
@@ -145,7 +146,11 @@ bool AP_InertialSensor_CustomSerialIMU::parse_frame(const uint8_t *frame)
         return false;
     }
 
-    accum.gyro  = Vector3f(gx, gy, gz);
+    // This IMU already outputs PHYSICAL units (gyro deg/s, accel m/s^2),
+    // unlike ICM20689/ICM20602/BMI055 which output raw counts that need
+    // scale-factor multiply + bias subtraction. So: no scale, no bias here.
+    // Only convert gyro deg/s -> rad/s (EKF/AHRS expect rad/s and m/s^2).
+    accum.gyro  = Vector3f(gx, gy, gz) * DEG_TO_RAD;
     accum.accel = Vector3f(ax, ay, az);
     accum.temp  = temp_raw * TEMP_SCALE;
     accum.last_update_us = AP_HAL::micros64();
