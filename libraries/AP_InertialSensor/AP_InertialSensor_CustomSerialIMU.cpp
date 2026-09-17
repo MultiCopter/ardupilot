@@ -261,6 +261,7 @@ AP_InertialSensor_Backend *AP_InertialSensor_CustomSerialIMU::probe(AP_InertialS
     AP_HAL::UARTDriver *uart = SM.find_serial(
         AP_SerialManager::SerialProtocol_AHRS, 1);
     if (uart == nullptr) {
+        hal.console->printf("CustomSerialIMU: no SERIALx_PROTOCOL=36 (SerialProtocol_AHRS) configured, probe skipped\n");
         return nullptr;
     }
 
@@ -312,6 +313,8 @@ AP_InertialSensor_Backend *AP_InertialSensor_CustomSerialIMU::probe(AP_InertialS
     }
 
     uart->discard_input();
+    hal.console->printf("CustomSerialIMU: only %u/3 valid frames in 3s on AHRS UART (check RS-422 wiring/baud/power)\n",
+                        (unsigned)valid_frames);
     return nullptr;
 }
 
