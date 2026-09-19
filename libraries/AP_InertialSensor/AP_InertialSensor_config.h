@@ -93,5 +93,8 @@
 #endif // AP_INERTIALSENSOR_RST_ENABLED
 
 #ifndef AP_INERTIALSENSOR_CUSTOM_SERIAL_IMU_ENABLED
-#define AP_INERTIALSENSOR_CUSTOM_SERIAL_IMU_ENABLED 1
+// Default off: the backend steals SerialProtocol_AHRS (36) ports which
+// would otherwise be reserved for AP_ExternalAHRS. Boards that need
+// this backend opt in via hwdef.dat, e.g. CUAVv5.
+#define AP_INERTIALSENSOR_CUSTOM_SERIAL_IMU_ENABLED 0
 #endif // AP_INERTIALSENSOR_CUSTOM_SERIAL_IMU_ENABLED

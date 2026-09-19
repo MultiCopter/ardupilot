@@ -32,3 +32,7 @@ IMU BMI088 SPI:bmi055_a SPI:bmi055_g ROTATION_ROLL_180_YAW_90
 
 # Reserve one extra IMU instance for the external custom serial IMU (IMU3)
 define INS_AUX_INSTANCES 1
+
+# Opt in to the CustomSerialIMU backend (default-off in AP_InertialSensor_config.h).
+# This board carries the external RS-422 IMU on UART4 (SERIAL4).
+define AP_INERTIALSENSOR_CUSTOM_SERIAL_IMU_ENABLED 1

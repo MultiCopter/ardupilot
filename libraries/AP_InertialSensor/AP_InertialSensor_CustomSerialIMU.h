@@ -2,19 +2,23 @@
   Custom Serial IMU backend for AP_InertialSensor
 
   Protocol: RS-422, 921600 bps, 8N1, 1000 Hz output
-  Frame: 39 bytes
-    [0-1]   0xAA55          header byte 0-1
-    [2-3]   0xEB90          header byte 2-3
-    [4-7]   uint32          output counter
-    [8-11]  float           Gx  (°/s)
-    [12-15] float           Gy  (°/s)
-    [16-19] float           Gz  (°/s)
-    [20-23] float           Ax  (m/s²)
-    [24-27] float           Ay  (m/s²)
-    [28-31] float           Az  (m/s²)
-    [32-33] int16           Temp (℃ × 100)
+  Frame: 38 bytes (measured; doc said 39 but that includes a phantom
+  trailing CRC16 byte that does not exist on the wire)
+    [0]     0xAA            header byte 0
+    [1]     0x55            header byte 1
+    [2]     0xEB            header byte 2
+    [3]     0x90            header byte 3
+    [4-7]   uint32  LE      output counter
+    [8-11]  float   LE      Gx  (deg/s)
+    [12-15] float   LE      Gy  (deg/s)
+    [16-19] float   LE      Gz  (deg/s)
+    [20-23] float   LE      Ax  (m/s^2)
+    [24-27] float   LE      Ay  (m/s^2)
+    [28-31] float   LE      Az  (m/s^2)
+    [32-33] int16   LE      Temp (degC * 100)
     [34-36] --             reserved
-    [37-38] uint16         CRC16 (bytes 0-36, Modbus/RTU polynomial 0x8005)
+    [37]    uint8           SUM8 = sum(bytes[0..36]) & 0xFF
+                           (doc said CRC16 Modbus 0xA001; measured SUM8 over 2172 frames)
 */
 
 #pragma once
@@ -50,14 +54,8 @@ public:
     bool get_output_banner(char *banner, uint8_t banner_len) override;
 
 private:
-    static constexpr uint8_t FRAME_SIZE   = 38;  // measured: 4 hdr + 4 cnt + 24 data + 2 temp + 3 reserved + 1 bytesum(SUM8)
-    static constexpr uint16_t FRAME_HEADER = 0x55AA;  // bytes 0-1
-    static constexpr uint16_t FRAME_HEADER2 = 0x90EB; // bytes 2-3 (little-endian)
-
-    /* protocol constants */
-    static constexpr float GYRO_SCALE   = 1.0f;    // already °/s
-    static constexpr float ACCEL_SCALE  = 1.0f;    // already m/s²
-    static constexpr float TEMP_SCALE   = 0.01f;   // int16 ÷ 100 = ℃
+    static constexpr uint8_t FRAME_SIZE = 38;  // measured: 4 hdr + 4 cnt + 24 data + 2 temp + 3 reserved + 1 bytesum(SUM8)
+    static constexpr float TEMP_SCALE  = 0.01f;  // int16 / 100 = degC
 
     int8_t serial_port;
     AP_HAL::UARTDriver *uart = nullptr;
@@ -81,16 +79,12 @@ private:
     static uint8_t _probe_failure_send_count;
     static bool _probe_failure_pending;
 
-    /* CRC16 (Modbus RTU polynomial 0x8005) */
-    uint16_t crc16_modbus(const uint8_t *data, uint16_t len);
-
     /* parse one complete frame, return true if valid */
     bool parse_frame(const uint8_t *frame);
 
     /* push a byte into the ring buffer and look for frame sync */
     void handle_byte(uint8_t b);
 
-    /* decimation counter */
+    /* decimation counter - 1 = "at least one new frame since last update" */
     uint16_t decimate_counter;
-    static constexpr uint16_t DECIMATION = 10; // 1000Hz / 10 = 100 Hz to frontend
 };

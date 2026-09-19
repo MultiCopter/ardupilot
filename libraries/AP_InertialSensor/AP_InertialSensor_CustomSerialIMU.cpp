@@ -71,25 +71,6 @@ void AP_InertialSensor_CustomSerialIMU::clear_pending_probe_failure()
 }
 
 /*
-  CRC16 - Modbus RTU polynomial 0xA001 (reflected 0x8005)
-*/
-uint16_t AP_InertialSensor_CustomSerialIMU::crc16_modbus(const uint8_t *data, uint16_t len)
-{
-    uint16_t crc = 0xFFFF;
-    for (uint16_t i = 0; i < len; i++) {
-        crc ^= data[i];
-        for (uint8_t j = 0; j < 8; j++) {
-            if (crc & 0x0001) {
-                crc = (crc >> 1) ^ 0xA001;
-            } else {
-                crc >>= 1;
-            }
-        }
-    }
-    return crc;
-}
-
-/*
   Read a little-endian float from a byte buffer.
   Avoids aliasing UB by using memcpy.
 */
@@ -150,9 +131,16 @@ bool AP_InertialSensor_CustomSerialIMU::parse_frame(const uint8_t *frame)
     // unlike ICM20689/ICM20602/BMI055 which output raw counts that need
     // scale-factor multiply + bias subtraction. So: no scale, no bias here.
     // Only convert gyro deg/s -> rad/s (EKF/AHRS expect rad/s and m/s^2).
-    // IMU->body axis remap: IMU +X=body +Z, IMU +Y=body +Y, IMU +Z=body +X (improper, det=-1)
-    // Verified static: IMU ax=-1g -> body az=-1g (specific force along -Z when level).
-    // Previous -az in accel gave +1g -> EKF roll=178deg (180 wrap). Fixed to az=-1g -> roll~0.
+    //
+    // IMU->body axis remap (C1 fix): IMU +X=body +Z, IMU +Y=body +Y,
+    // IMU +Z=body +X. The transform is det=-1 (improper reflection + a
+    // permutation), so the framework's Rotation enum (det=+1 orthogonal
+    // matrices only) cannot express it. We keep this manual remap and
+    // declare the orientation as ROTATION_NONE in start(); if the IMU is
+    // ever re-mounted so the mapping becomes det=+1, replace the manual
+    // mapping with set_gyro_orientation/set_accel_orientation(<rot>).
+    // Verified static: IMU ax=-1g -> body az=-1g, roll~0 (was 178 deg
+    // before the az sign fix).
     accum.gyro  = Vector3f(gz, gy, gx) * DEG_TO_RAD;
     accum.accel = Vector3f(az, ay, ax);
     accum.temp  = temp_raw * TEMP_SCALE;
@@ -164,7 +152,7 @@ bool AP_InertialSensor_CustomSerialIMU::parse_frame(const uint8_t *frame)
 /*
   Handle one incoming byte.
   Searches for frame sync (AA 55 EB 90) and fills rxbuf.
-  When rxbuf is full (39 bytes), calls parse_frame().
+  When rxbuf is full (38 bytes), calls parse_frame().
 */
 void AP_InertialSensor_CustomSerialIMU::handle_byte(uint8_t b)
 {
@@ -216,7 +204,7 @@ void AP_InertialSensor_CustomSerialIMU::handle_byte(uint8_t b)
         return;
     }
 
-    // Frame complete (39 bytes received)
+    // Frame complete (38 bytes received)
     if (parse_frame(rxbuf)) {
         decimate_counter++;
     }
@@ -224,8 +212,14 @@ void AP_InertialSensor_CustomSerialIMU::handle_byte(uint8_t b)
 }
 
 /*
-  Accumulate samples from UART.
-  Called frequently by the frontend accumulate() loop.
+  Accumulate samples from UART and notify frontend of new data.
+  Called frequently by the frontend accumulate() loop (run inside
+  wait_for_sample()).
+
+  IMPORTANT (C5): the _notify_new_*_raw_sample calls live HERE, not in
+  update(). If notify/clear were both in update(), wait_for_sample()
+  would always observe a cleared flag between cycles and deadlock when
+  only one IMU is enabled (INS_ENABLE_MASK keeps only this bit).
 */
 void AP_InertialSensor_CustomSerialIMU::accumulate()
 {
@@ -241,20 +235,12 @@ void AP_InertialSensor_CustomSerialIMU::accumulate()
         }
         handle_byte(b);
     }
-}
-
-/*
-  Publish accumulated sample to frontend.
-  Decimated from 1000 Hz (native) to the configured frontend rate.
-*/
-bool AP_InertialSensor_CustomSerialIMU::update()
-{
-    if (!started) {
-        return false;
-    }
 
     if (decimate_counter > 0) {
-        // Apply board orientation rotation and calibration
+        // Notify frontend of new sample. _rotate_and_correct_* applies
+        // board orientation + per-axis scale/bias calibration; then
+        // _notify_new_*_raw_sample sets the per-instance _new_*_data
+        // flag that wait_for_sample() polls.
         Vector3f accel = accum.accel;
         _rotate_and_correct_accel(accel_instance, accel);
         _notify_new_accel_raw_sample(accel_instance, accel, accum.last_update_us);
@@ -263,10 +249,24 @@ bool AP_InertialSensor_CustomSerialIMU::update()
         _rotate_and_correct_gyro(gyro_instance, gyro);
         _notify_new_gyro_raw_sample(gyro_instance, gyro, accum.last_update_us);
 
-        _publish_temperature(accel_instance, accum.temp);
-
         decimate_counter = 0;
     }
+}
+
+/*
+  Publish accumulated sample to frontend.
+
+  Note: _notify_new_*_raw_sample is called from accumulate(), NOT here
+  (C5 fix). update_accel()/update_gyro() advance the frontend filters
+  and clear the per-instance _new_*_data flag.
+*/
+bool AP_InertialSensor_CustomSerialIMU::update()
+{
+    if (!started) {
+        return false;
+    }
+
+    _publish_temperature(accel_instance, accum.temp);
 
     update_accel(accel_instance);
     update_gyro(gyro_instance);
@@ -275,7 +275,15 @@ bool AP_InertialSensor_CustomSerialIMU::update()
 }
 
 /*
-  Register gyro and accel with the frontend at 1000 Hz.
+  Register gyro and accel with the frontend.
+
+  Declared sample rate: 1000 Hz (matches IMU native output).
+  Actual publish rate: equal to the main loop rate (~400 Hz on Copter
+  with SCHED_LOOP_RATE=400). The frontend AP_InertialSensor::
+  _update_sensor_rate() self-corrects low-pass/notch coefficients and
+  GyroFFT bin counts within ~20-30 s. Until then, those coefficients
+  are slightly off; for static bench testing this is harmless, but for
+  flying add a 30 s idle at boot before takeoff.
 */
 void AP_InertialSensor_CustomSerialIMU::start()
 {
@@ -297,6 +305,13 @@ void AP_InertialSensor_CustomSerialIMU::start()
         return;
     }
 
+    // C1 option B: explicitly declare orientation. The det=-1 remap is
+    // applied by hand in parse_frame() because Rotation cannot express
+    // an improper transformation; if the IMU is remounted so the mapping
+    // becomes det=+1, set a real Rotation here and drop the manual remap.
+    set_gyro_orientation(gyro_instance, ROTATION_NONE);
+    set_accel_orientation(accel_instance, ROTATION_NONE);
+
     started = true;
 }
 
@@ -304,6 +319,9 @@ void AP_InertialSensor_CustomSerialIMU::start()
   Probe function - detect the IMU on an AHRS-configured serial port.
   Looks for 3 consecutive valid frames within 3 seconds.
   Returns a new backend on success, nullptr on failure.
+
+  The window was 60s in earlier revisions to work around the
+  find_serial() instance bug; that bug is fixed so 3s is enough.
 */
 AP_InertialSensor_Backend *AP_InertialSensor_CustomSerialIMU::probe(AP_InertialSensor &imu)
 {
@@ -331,7 +349,7 @@ AP_InertialSensor_Backend *AP_InertialSensor_CustomSerialIMU::probe(AP_InertialS
     uint8_t rxbuf[FRAME_SIZE];
     uint16_t rxbuf_pos = 0;
     uint8_t valid_frames = 0;
-    uint32_t deadline = AP_HAL::millis() + 60000;
+    uint32_t deadline = AP_HAL::millis() + 3000;
 
     while (AP_HAL::millis() < deadline) {
         int16_t n = uart->available();
@@ -370,7 +388,7 @@ AP_InertialSensor_Backend *AP_InertialSensor_CustomSerialIMU::probe(AP_InertialS
     uart->discard_input();
     {
         char m[128];
-        snprintf(m, sizeof(m), "CustomSerialIMU: only %u/3 valid frames in 60s on AHRS UART (check RS-422 wiring/baud/power)", (unsigned)valid_frames);
+        snprintf(m, sizeof(m), "CustomSerialIMU: only %u/3 valid frames in 3s on AHRS UART (check RS-422 wiring/baud/power)", (unsigned)valid_frames);
         hal.console->printf("%s\n", m);
         strncpy(_probe_failure_msg, m, sizeof(_probe_failure_msg) - 1);
         _probe_failure_msg[sizeof(_probe_failure_msg) - 1] = 0;
