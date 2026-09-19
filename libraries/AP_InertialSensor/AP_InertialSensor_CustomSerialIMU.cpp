@@ -92,7 +92,10 @@ static inline int16_t read_int16_le(const uint8_t *p)
 /*
   Parse one complete 38-byte frame.
   Frame is little-endian (LSB first).
-  Returns true if frame is valid and data is extracted into accum.
+  Returns true if frame is valid; on success the new sample is immediately
+  notified to the frontend via _notify_new_*_raw_sample (FIFO-backend
+  pattern: each raw sample is an independent notify, the frontend
+  trapezoidal-integrates into delta-angle / delta-velocity accumulators).
 */
 bool AP_InertialSensor_CustomSerialIMU::parse_frame(const uint8_t *frame)
 {
@@ -141,10 +144,20 @@ bool AP_InertialSensor_CustomSerialIMU::parse_frame(const uint8_t *frame)
     // mapping with set_gyro_orientation/set_accel_orientation(<rot>).
     // Verified static: IMU ax=-1g -> body az=-1g, roll~0 (was 178 deg
     // before the az sign fix).
-    accum.gyro  = Vector3f(gz, gy, gx) * DEG_TO_RAD;
-    accum.accel = Vector3f(az, ay, ax);
-    accum.temp  = temp_raw * TEMP_SCALE;
-    accum.last_update_us = AP_HAL::micros64();
+    // Notify the frontend immediately (FIFO-backend pattern: each raw
+    // sample is an independent notify; the frontend trapezoidal-integrates
+    // into the delta-angle / delta-velocity accumulators). sample_us=0 =>
+    // the frontend uses the declared sample rate (1000 Hz) for dt, matching
+    // the ICM FIFO backends which also have no per-sample hardware timestamp.
+    Vector3f accel = Vector3f(az, ay, ax);
+    _rotate_and_correct_accel(accel_instance, accel);
+    _notify_new_accel_raw_sample(accel_instance, accel, 0);
+
+    Vector3f gyro = Vector3f(gz, gy, gx) * DEG_TO_RAD;  // deg/s -> rad/s
+    _rotate_and_correct_gyro(gyro_instance, gyro);
+    _notify_new_gyro_raw_sample(gyro_instance, gyro, 0);
+
+    _temp = temp_raw * TEMP_SCALE;
 
     return true;
 }
@@ -204,22 +217,23 @@ void AP_InertialSensor_CustomSerialIMU::handle_byte(uint8_t b)
         return;
     }
 
-    // Frame complete (38 bytes received)
-    if (parse_frame(rxbuf)) {
-        decimate_counter++;
-    }
+    // Frame complete (38 bytes received). parse_frame() notifies the
+    // frontend of the new sample on success.
+    parse_frame(rxbuf);
     rxbuf_pos = 0;
 }
 
 /*
-  Accumulate samples from UART and notify frontend of new data.
-  Called frequently by the frontend accumulate() loop (run inside
+  Accumulate samples from UART; each valid frame is notified to the
+  frontend from parse_frame() (which runs inside handle_byte() below).
+  Called frequently by the frontend accumulate() loop (inside
   wait_for_sample()).
 
-  IMPORTANT (C5): the _notify_new_*_raw_sample calls live HERE, not in
-  update(). If notify/clear were both in update(), wait_for_sample()
-  would always observe a cleared flag between cycles and deadlock when
-  only one IMU is enabled (INS_ENABLE_MASK keeps only this bit).
+  IMPORTANT (C5): _notify_new_*_raw_sample is called from parse_frame()
+  (i.e. inside accumulate()), never from update(). If notify/clear were
+  both in update(), wait_for_sample() would always observe a cleared flag
+  between cycles and deadlock when only one IMU is enabled
+  (INS_ENABLE_MASK keeps only this bit).
 */
 void AP_InertialSensor_CustomSerialIMU::accumulate()
 {
@@ -235,30 +249,12 @@ void AP_InertialSensor_CustomSerialIMU::accumulate()
         }
         handle_byte(b);
     }
-
-    if (decimate_counter > 0) {
-        // Notify frontend of new sample. _rotate_and_correct_* applies
-        // board orientation + per-axis scale/bias calibration; then
-        // _notify_new_*_raw_sample sets the per-instance _new_*_data
-        // flag that wait_for_sample() polls.
-        Vector3f accel = accum.accel;
-        _rotate_and_correct_accel(accel_instance, accel);
-        _notify_new_accel_raw_sample(accel_instance, accel, accum.last_update_us);
-
-        Vector3f gyro = accum.gyro;
-        _rotate_and_correct_gyro(gyro_instance, gyro);
-        _notify_new_gyro_raw_sample(gyro_instance, gyro, accum.last_update_us);
-
-        decimate_counter = 0;
-    }
 }
 
 /*
-  Publish accumulated sample to frontend.
-
-  Note: _notify_new_*_raw_sample is called from accumulate(), NOT here
-  (C5 fix). update_accel()/update_gyro() advance the frontend filters
-  and clear the per-instance _new_*_data flag.
+  Publish to frontend. _notify_new_*_raw_sample is called per-frame from
+  parse_frame() (C5 fix); here we only publish temperature and advance the
+  frontend filters / clear the per-instance _new_*_data flag.
 */
 bool AP_InertialSensor_CustomSerialIMU::update()
 {
@@ -266,7 +262,7 @@ bool AP_InertialSensor_CustomSerialIMU::update()
         return false;
     }
 
-    _publish_temperature(accel_instance, accum.temp);
+    _publish_temperature(accel_instance, _temp);
 
     update_accel(accel_instance);
     update_gyro(gyro_instance);
@@ -277,13 +273,14 @@ bool AP_InertialSensor_CustomSerialIMU::update()
 /*
   Register gyro and accel with the frontend.
 
-  Declared sample rate: 1000 Hz (matches IMU native output).
-  Actual publish rate: equal to the main loop rate (~400 Hz on Copter
-  with SCHED_LOOP_RATE=400). The frontend AP_InertialSensor::
-  _update_sensor_rate() self-corrects low-pass/notch coefficients and
-  GyroFFT bin counts within ~20-30 s. Until then, those coefficients
-  are slightly off; for static bench testing this is harmless, but for
-  flying add a 30 s idle at boot before takeoff.
+  Declared sample rate: 1000 Hz (matches IMU native output). Each valid
+  frame is an independent _notify_new_*_raw_sample (sample_us=0, like the
+  ICM FIFO backends), so the frontend trapezoidal-integrates every one of
+  the 1000 Hz samples into the delta-angle / delta-velocity accumulators.
+  The main loop (SCHED_LOOP_RATE=400) consumes them, so EKF sees the 1000
+  Hz data averaged down to 400 Hz per cycle - the standard APM pattern.
+  _update_sensor_rate() measures ~1000 Hz, so dt stays correct (no 20-30 s
+  self-correction window needed).
 */
 void AP_InertialSensor_CustomSerialIMU::start()
 {
@@ -409,14 +406,8 @@ AP_InertialSensor_CustomSerialIMU::AP_InertialSensor_CustomSerialIMU(
     AP_InertialSensor_Backend(imu),
     serial_port(serial_port_id),
     started(false),
-    rxbuf_pos(0),
-    decimate_counter(0)
+    rxbuf_pos(0)
 {
-    accum.gyro.zero();
-    accum.accel.zero();
-    accum.temp = 25.0f;   // default 25℃
-    accum.last_update_us = 0;
-
     // Retrieve the UART from SerialManager (first AHRS-configured port)
     AP_SerialManager &SM = AP::serialmanager();
     uart = SM.find_serial(AP_SerialManager::SerialProtocol_AHRS, 0);

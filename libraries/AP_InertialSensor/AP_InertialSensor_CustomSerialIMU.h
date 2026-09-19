@@ -65,13 +65,8 @@ private:
     uint8_t rxbuf[FRAME_SIZE];
     uint16_t rxbuf_pos;
 
-    /* accumulated samples for decimation to IMU rate */
-    struct {
-        uint64_t last_update_us;
-        Vector3f gyro;
-        Vector3f accel;
-        float temp;
-    } accum;
+    /* latest temperature (degC), published once per update() */
+    float _temp = 25.0f;
 
     /* pending probe-failure message for GCS_SEND_TEXT re-broadcast */
     static char _probe_failure_msg[128];
@@ -79,12 +74,12 @@ private:
     static uint8_t _probe_failure_send_count;
     static bool _probe_failure_pending;
 
-    /* parse one complete frame, return true if valid */
+    /* parse one complete frame; on success immediately notify the frontend
+       of the new sample (FIFO-backend pattern: each raw sample is an
+       independent notify, the frontend trapezoidal-integrates). Returns true
+       if valid. */
     bool parse_frame(const uint8_t *frame);
 
     /* push a byte into the ring buffer and look for frame sync */
     void handle_byte(uint8_t b);
-
-    /* decimation counter - 1 = "at least one new frame since last update" */
-    uint16_t decimate_counter;
 };
