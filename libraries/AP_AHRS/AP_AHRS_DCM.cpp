@@ -185,9 +185,10 @@ void AP_AHRS_DCM::matrix_update(void)
     float dangle_dt;
     if (_ins.get_delta_angle(delta_angle, dangle_dt) && dangle_dt > 0) {
         _omega = delta_angle / dangle_dt;
-        // [TEST-AHRS-MUTEX] 纯陀螺积分：不加入 _omega_I 慢零偏补偿
-        // _omega += _omega_I;
-        _dcm_matrix.rotate((_omega + _omega_P + _omega_yaw_P) * dangle_dt);
+        // [TEST-AHRS-MUTEX] 纯陀螺积分：只积陀螺角速率，不叠加任何
+        // 加表/GPS 修正（_omega_P / _omega_yaw_P）。叠加后姿态会被加表
+        // 以 tau ~= 1/(AHRS_RP_P * _P_gain)（默认 ~10s）缓慢拉平。
+        _dcm_matrix.rotate(_omega * dangle_dt);
     }
 
     // now update _omega from the filtered value from the primary IMU. We need to use

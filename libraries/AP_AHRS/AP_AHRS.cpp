@@ -514,6 +514,9 @@ void AP_AHRS::update(bool skip_ins_update)
 #if HAL_NAVEKF3_AVAILABLE
         update_EKF3();
 #endif
+    } else if (_ekf_type == 0) {
+        // [TEST-AHRS-MUTEX] 纯 DCM 模式：除上面的 update_DCM() 外不运行任何估计器
+        // （上游在此仍会后台运行 EKF3/EKF2，与"二选一"冲突）
     } else {
         // otherwise run EKF3 first
 #if HAL_NAVEKF3_AVAILABLE
@@ -2087,15 +2090,11 @@ AP_AHRS::EKFType AP_AHRS::_active_EKF_type(void) const
         if (!_ekf3_started) {
             return EKFType::THREE;
         }
-        if (always_use_EKF()) {
-            uint16_t ekf3_faults;
-            EKF3.getFilterFaults(ekf3_faults);
-            if (ekf3_faults == 0) {
-                ret = EKFType::THREE;
-            }
-        } else if (EKF3.healthy()) {
-            ret = EKFType::THREE;
-        }
+        // [TEST-AHRS-MUTEX] 纯 EKF3 模式：无条件使用 EKF3，不做任何回退。
+        // 上游此处为 "always_use_EKF() 且无 fault" 或 "EKF3.healthy()" 才置位；
+        // always_use_EKF 被本测试关闭后，只要 healthy() 为假 ret 就会停在 NONE，
+        // 而 DCM 已不再运行(见 AP_AHRS::update)，AHRS 姿态会变成陈旧值。
+        ret = EKFType::THREE;
         break;
     }
 #endif
