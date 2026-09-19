@@ -185,7 +185,8 @@ void AP_AHRS_DCM::matrix_update(void)
     float dangle_dt;
     if (_ins.get_delta_angle(delta_angle, dangle_dt) && dangle_dt > 0) {
         _omega = delta_angle / dangle_dt;
-        _omega += _omega_I;
+        // [TEST-AHRS-MUTEX] 纯陀螺积分：不加入 _omega_I 慢零偏补偿
+        // _omega += _omega_I;
         _dcm_matrix.rotate((_omega + _omega_P + _omega_yaw_P) * dangle_dt);
     }
 
@@ -197,7 +198,8 @@ void AP_AHRS_DCM::matrix_update(void)
     // and including the P terms would give positive feedback into
     // the _P_gain() calculation, which can lead to a very large P
     // value
-    _omega = _ins.get_gyro() + _omega_I;
+    // [TEST-AHRS-MUTEX] 纯陀螺积分：不加入 _omega_I 慢零偏补偿
+    _omega = _ins.get_gyro(); // + _omega_I
 }
 
 
@@ -625,7 +627,8 @@ AP_AHRS_DCM::drift_correction_yaw(void)
     // for more than 2 seconds
     if (yaw_deltat < 2.0f && spin_rate < radians(SPIN_RATE_LIMIT)) {
         // also add to the I term
-        _omega_I_sum.z += error_z * _ki_yaw * yaw_deltat;
+        // [TEST-AHRS-MUTEX] 纯陀螺积分：禁用 yaw 慢零偏积累
+        // _omega_I_sum.z += error_z * _ki_yaw * yaw_deltat;
     }
 
     _error_yaw = 0.8f * _error_yaw + 0.2f * fabsf(yaw_error);
@@ -956,7 +959,8 @@ AP_AHRS_DCM::drift_correction(float deltat)
 
     // accumulate some integrator error
     if (spin_rate < radians(SPIN_RATE_LIMIT)) {
-        _omega_I_sum += error[besti] * _ki * _ra_deltat;
+        // [TEST-AHRS-MUTEX] 纯陀螺积分：禁用 roll/pitch 慢零偏积累
+        // _omega_I_sum += error[besti] * _ki * _ra_deltat;
         _omega_I_sum_time += _ra_deltat;
     }
 

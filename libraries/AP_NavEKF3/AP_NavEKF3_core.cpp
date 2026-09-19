@@ -647,45 +647,9 @@ void NavEKF3_core::UpdateFilter(bool predict)
         // Predict states using IMU data from the delayed time horizon
         UpdateStrapdownEquationsNED();
 
+        // [TEST-AHRS-MUTEX] 纯 IMU 积分：仅保留 Strapdown(陀螺积分姿态 + 加速度积分速度/位置)
         // Predict the covariance growth
         CovariancePrediction(nullptr);
-
-        // Run the IMU prediction step for the GSF yaw estimator algorithm
-        // using IMU and optionally true airspeed data.
-        // Must be run before SelectMagFusion() to provide an up to date yaw estimate
-        runYawEstimatorPrediction();
-
-        // Update states using  magnetometer or external yaw sensor data
-        SelectMagFusion();
-
-        // Update states using GPS and altimeter data
-        SelectVelPosFusion();
-
-        // Run the GPS velocity correction step for the GSF yaw estimator algorithm
-        // and use the yaw estimate to reset the main EKF yaw if requested
-        // Muat be run after SelectVelPosFusion() so that fresh GPS data is available
-        runYawEstimatorCorrection();
-
-#if EK3_FEATURE_BEACON_FUSION
-        // Update states using range beacon data
-        SelectRngBcnFusion();
-#endif
-
-#if EK3_FEATURE_OPTFLOW_FUSION
-        // Update states using optical flow data
-        SelectFlowFusion();
-#endif
-
-#if EK3_FEATURE_BODY_ODOM
-        // Update states using body frame odometry data
-        SelectBodyOdomFusion();
-#endif
-
-        // Update states using airspeed data
-        SelectTasFusion();
-
-        // Update states using sideslip constraint assumption for fly-forward vehicles or body drag for multicopters
-        SelectBetaDragFusion();
 
         // Update the filter status
         updateFilterStatus();

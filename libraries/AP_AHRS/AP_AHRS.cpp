@@ -248,9 +248,11 @@ AP_AHRS::AP_AHRS(uint8_t flags) :
     // load default values from var_info table
     AP_Param::setup_object_defaults(this, var_info);
 
+#if 0 // [TEST-AHRS-MUTEX] 禁用 Copter 强制 EKF，允许 AHRS_EKF_TYPE=0 使用纯 DCM
 #if APM_BUILD_COPTER_OR_HELI || APM_BUILD_TYPE(APM_BUILD_ArduSub)
     // Copter and Sub force the use of EKF
     _ekf_flags |= AP_AHRS::FLAG_ALWAYS_USE_EKF;
+#endif
 #endif
     state.dcm_matrix.identity();
 
@@ -481,7 +483,10 @@ void AP_AHRS::update(bool skip_ins_update)
     update_trim_rotation_matrices();
 
 #if AP_AHRS_DCM_ENABLED
-    update_DCM();
+    // [TEST-AHRS-MUTEX] 仅纯 DCM 模式运行 DCM，EKF3 模式 DCM 不跑(不做备胎)
+    if (_ekf_type == 0) {
+        update_DCM();
+    }
 #endif
 
     // update takeoff/touchdown flags
@@ -501,6 +506,11 @@ void AP_AHRS::update(bool skip_ins_update)
 #if HAL_NAVEKF2_AVAILABLE
         update_EKF2();
 #endif
+#if HAL_NAVEKF3_AVAILABLE
+        update_EKF3();
+#endif
+    } else if (_ekf_type == 3) {
+        // [TEST-AHRS-MUTEX] 纯 EKF3 模式：仅运行 EKF3，DCM 不参与
 #if HAL_NAVEKF3_AVAILABLE
         update_EKF3();
 #endif
@@ -2072,9 +2082,10 @@ AP_AHRS::EKFType AP_AHRS::_active_EKF_type(void) const
 
 #if HAL_NAVEKF3_AVAILABLE
     case EKFType::THREE: {
+        // [TEST-AHRS-MUTEX] 纯 EKF3 模式：EKF3 未启动也不回退 DCM
         // do we have an EKF3 yet?
         if (!_ekf3_started) {
-            return fallback_active_EKF_type();
+            return EKFType::THREE;
         }
         if (always_use_EKF()) {
             uint16_t ekf3_faults;
