@@ -135,25 +135,23 @@ bool AP_InertialSensor_CustomSerialIMU::parse_frame(const uint8_t *frame)
     // scale-factor multiply + bias subtraction. So: no scale, no bias here.
     // Only convert gyro deg/s -> rad/s (EKF/AHRS expect rad/s and m/s^2).
     //
-    // IMU->body axis remap (C1 fix): IMU +X=body +Z, IMU +Y=body +Y,
-    // IMU +Z=body +X. The transform is det=-1 (improper reflection + a
-    // permutation), so the framework's Rotation enum (det=+1 orthogonal
-    // matrices only) cannot express it. We keep this manual remap and
-    // declare the orientation as ROTATION_NONE in start(); if the IMU is
-    // ever re-mounted so the mapping becomes det=+1, replace the manual
-    // mapping with set_gyro_orientation/set_accel_orientation(<rot>).
-    // Verified static: IMU ax=-1g -> body az=-1g, roll~0 (was 178 deg
-    // before the az sign fix).
-    // Notify the frontend immediately (FIFO-backend pattern: each raw
-    // sample is an independent notify; the frontend trapezoidal-integrates
-    // into the delta-angle / delta-velocity accumulators). sample_us=0 =>
-    // the frontend uses the declared sample rate (1000 Hz) for dt, matching
-    // the ICM FIFO backends which also have no per-sample hardware timestamp.
-    Vector3f accel = Vector3f(az, ay, ax);
+    // C1 fix (final): the driver emits the IMU's NATIVE right-handed
+    // coordinates. The IMU->body remap (IMU +X=body +Z, IMU +Y=body -Y,
+    // IMU +Z=body +X) is a proper rotation with det=+1, applied by the
+    // framework via set_gyro_orientation/set_accel_orientation
+    // (ROTATION_ROLL_180_PITCH_270) in start(). The earlier in-driver
+    // manual remap was det=-1 (improper, EKF-incompatible); a proper
+    // Rotation enum can only express det=+1, so it must live in set_orientation().
+    // Notify the frontend immediately (FIFO-backend pattern: each raw sample is
+    // an independent notify; the frontend trapezoidal-integrates into the
+    // delta-angle / delta-velocity accumulators). sample_us=0 => the frontend
+    // uses the declared sample rate (1000 Hz) for dt, matching the ICM FIFO
+    // backends which also have no per-sample hardware timestamp.
+    Vector3f accel = Vector3f(ax, ay, az);
     _rotate_and_correct_accel(accel_instance, accel);
     _notify_new_accel_raw_sample(accel_instance, accel, 0);
 
-    Vector3f gyro = Vector3f(gz, gy, gx) * DEG_TO_RAD;  // deg/s -> rad/s
+    Vector3f gyro = Vector3f(gx, gy, gz) * DEG_TO_RAD;  // deg/s -> rad/s
     _rotate_and_correct_gyro(gyro_instance, gyro);
     _notify_new_gyro_raw_sample(gyro_instance, gyro, 0);
 
@@ -302,12 +300,13 @@ void AP_InertialSensor_CustomSerialIMU::start()
         return;
     }
 
-    // C1 option B: explicitly declare orientation. The det=-1 remap is
-    // applied by hand in parse_frame() because Rotation cannot express
-    // an improper transformation; if the IMU is remounted so the mapping
-    // becomes det=+1, set a real Rotation here and drop the manual remap.
-    set_gyro_orientation(gyro_instance, ROTATION_NONE);
-    set_accel_orientation(accel_instance, ROTATION_NONE);
+    // C1 fix (final): IMU->body mapping is IMU +X=body +Z, IMU +Y=body -Y,
+    // IMU +Z=body +X (det=+1, proper rotation). It is expressed exactly by
+    // ROTATION_ROLL_180_PITCH_270 (AP_Math/vector3.cpp: (x,y,z)->(z,-y,x)).
+    // The driver emits the IMU's raw coordinates; the framework applies
+    // this rotation. No in-driver remap (which would be det=-1 / improper).
+    set_gyro_orientation(gyro_instance, ROTATION_ROLL_180_PITCH_270);
+    set_accel_orientation(accel_instance, ROTATION_ROLL_180_PITCH_270);
 
     started = true;
 }
